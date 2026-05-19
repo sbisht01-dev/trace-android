@@ -17,7 +17,7 @@
         "googleMaps": {
           "apiKey": "AIzaSyDQGs2yQ86yi3abXdWO_38i3lDQbkztoVI"
         }
-      },
+      }
     },
     "plugins": [
       "expo-router",
