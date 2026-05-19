@@ -3,7 +3,6 @@ import { View, Text, StyleSheet } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 
 export default function WalkStats({ walk, path, userWeight = 70 }) {
-    // Note: userWeight defaults to 70kg. Later, you can pass this in from your SQLite Profile table!
     
     if (!walk) return null;
 
@@ -70,7 +69,7 @@ export default function WalkStats({ walk, path, userWeight = 70 }) {
             
             {/* HERO STAT: Calories */}
             <StatBox 
-                icon="flame" 
+                icon="zap" 
                 label="CALORIES BURNED" 
                 value={caloriesBurned} 
                 unit="KCAL" 
