@@ -1,78 +1,133 @@
 import React from 'react';
-import { StyleSheet, View, Text } from 'react-native';
+import { View, Text, StyleSheet } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 
-const WalkStats = ({ walk, path }) => {
-    if (!walk || !path || path.length < 2) {
-        return (
-            <View style={styles.container}>
-                <Text style={styles.statLabel}>LOADING DATA...</Text>
-            </View>
-        );
-    }
+export default function WalkStats({ walk, path, userWeight = 70 }) {
+    // Note: userWeight defaults to 70kg. Later, you can pass this in from your SQLite Profile table!
+    
     if (!walk) return null;
-    // --- CALCULATIONS ---
-    // 1. Speeds (km/h)
-    const speeds = path.map((point, index) => {
-        if (index === 0) return 0;
-        const prev = path[index - 1];
-        const timeDiff = (point.timestamp - prev.timestamp) / 1000 / 3600; // hours
-        if (timeDiff === 0) return 0;
 
-        // Haversine distance for this segment
-        const R = 6371;
-        const dLat = (point.latitude - prev.latitude) * (Math.PI / 180);
-        const dLon = (point.longitude - prev.longitude) * (Math.PI / 180);
-        const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-            Math.cos(prev.latitude * (Math.PI / 180)) * Math.cos(point.latitude * (Math.PI / 180)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
-        const d = R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
+    // --- 1. CORE CALCULATIONS ---
+    const totalDistance = walk.distance ? walk.distance.toFixed(2) : "0.00";
+    const timeInHours = walk.duration / 3600;
+    
+    // Total Time Formatting
+    const hrs = Math.floor(walk.duration / 3600);
+    const mins = Math.floor((walk.duration % 3600) / 60);
+    const secs = walk.duration % 60;
+    const totalTime = hrs > 0 ? `${hrs}h ${mins}m` : `${mins}:${String(secs).padStart(2, '0')}`;
 
-        return d / timeDiff; // speed = dist / time
-    });
+    // Average Speed
+    const rawSpeed = timeInHours > 0 ? (walk.distance / timeInHours) : 0;
+    const avgSpeed = rawSpeed.toFixed(1);
 
-    const topSpeed = Math.max(...speeds);
-    const durationHours = (walk.duration || 1) / 3600;
-    const avgSpeed = (walk.distance || 0) / durationHours;
-    // const avgSpeed = walk.distance / (walk.duration / 3600);
+    // Average Elevation
+    let avgElevation = "0";
+    if (path && path.length > 0) {
+        let sumElevation = 0;
+        let validPoints = 0;
+        path.forEach(point => {
+            if (point.elevation) {
+                sumElevation += point.elevation;
+                validPoints++;
+            }
+        });
+        if (validPoints > 0) {
+            avgElevation = (sumElevation / validPoints).toFixed(0);
+        }
+    }
 
-    // 2. Elevations
-    const elevations = path.map(p => p.elevation || 0);
-    const topElevation = Math.max(...elevations);
-    const avgElevation = elevations.reduce((a, b) => a + b, 0) / elevations.length;
+    // --- 2. MET & CALORIE MATH ---
+    let currentMET = 3.3; // Default normal walk
+    if (rawSpeed < 3.2) {
+        currentMET = 2.0; // Stroll
+    } else if (rawSpeed >= 3.2 && rawSpeed < 5.0) {
+        currentMET = 3.3; // Normal walk
+    } else if (rawSpeed >= 5.0 && rawSpeed < 6.5) {
+        currentMET = 4.3; // Brisk walk
+    } else if (rawSpeed >= 6.5) {
+        currentMET = 8.3; // Jogging/Running
+    }
 
-    const StatItem = ({ icon, label, value, unit }) => (
-        <View style={styles.statBox}>
-            <Feather name={icon} size={14} color="#94A3B8" />
-            <Text style={styles.statLabel}>{label}</Text>
-            <Text style={styles.statValue}>{value}<Text style={styles.statUnit}> {unit}</Text></Text>
+    const caloriesBurned = (currentMET * userWeight * timeInHours).toFixed(0);
+
+    // --- REUSABLE STAT BOX COMPONENT ---
+    const StatBox = ({ icon, label, value, unit, isHero = false }) => (
+        <View style={[styles.statBox, isHero && styles.heroBox]}>
+            <View style={styles.iconRow}>
+                <Feather name={icon} size={isHero ? 16 : 14} color={isHero ? "#0EA5E9" : "#0EA5E9"} />
+                <Text style={styles.label}>{label}</Text>
+            </View>
+            <Text style={[styles.value, isHero && styles.heroValue]}>
+                {value} <Text style={styles.unit}>{unit}</Text>
+            </Text>
         </View>
     );
-    console.log(`Stats Debug: Walk ID: ${walk.id}, Path Points: ${path.length}`);
-    console.log("object");
+
     return (
         <View style={styles.container}>
+            <Text style={styles.title}>Session Summary</Text>
+            
+            {/* HERO STAT: Calories */}
+            <StatBox 
+                icon="flame" 
+                label="CALORIES BURNED" 
+                value={caloriesBurned} 
+                unit="KCAL" 
+                isHero={true}
+            />
+
+            {/* GRID STATS */}
             <View style={styles.grid}>
-                <StatItem icon="trending-up" label="TOP SPEED" value={topSpeed.toFixed(1)} unit="km/h" />
-                <StatItem icon="activity" label="AVG SPEED" value={avgSpeed.toFixed(1)} unit="km/h" />
-                <StatItem icon="arrow-up-right" label="MAX ELEV" value={Math.round(topElevation)} unit="m" />
-                <StatItem icon="bar-chart-2" label="AVG ELEV" value={Math.round(avgElevation)} unit="m" />
+                <StatBox 
+                    icon="activity" 
+                    label="AVG SPEED" 
+                    value={avgSpeed} 
+                    unit="KM/H" 
+                />
+                <StatBox 
+                    icon="trending-up" 
+                    label="AVG ELEV." 
+                    value={avgElevation} 
+                    unit="M" 
+                />
+                <StatBox 
+                    icon="clock" 
+                    label="TOTAL TIME" 
+                    value={totalTime} 
+                    unit={hrs > 0 ? "" : "MIN"} 
+                />
+                <StatBox 
+                    icon="map" 
+                    label="DISTANCE" 
+                    value={totalDistance} 
+                    unit="KM" 
+                />
             </View>
         </View>
     );
-};
+}
 
+// --- DARK MODE STYLESHEET ---
 const styles = StyleSheet.create({
     container: {
-        backgroundColor: '#FFF',
-        borderRadius: 25,
+        backgroundColor: '#0F172A',
         padding: 20,
-        marginTop: 10,
-        borderWidth: 1,    // Add this
-        // borderColor: 'red', // Add this
-        elevation: 4,
+        borderRadius: 25,
+        marginTop: 15,
+        borderWidth: 1,
+        borderColor: '#1E293B',
         shadowColor: '#000',
-        shadowOpacity: 0.05,
+        shadowOpacity: 0.5,
         shadowRadius: 10,
+        elevation: 5,
+    },
+    title: {
+        color: '#F8FAFC',
+        fontSize: 16,
+        fontWeight: '900',
+        marginBottom: 15,
+        letterSpacing: -0.5,
     },
     grid: {
         flexDirection: 'row',
@@ -80,27 +135,44 @@ const styles = StyleSheet.create({
         justifyContent: 'space-between',
     },
     statBox: {
-        width: '48%',
+        width: '48%', 
+        backgroundColor: '#020617', 
+        padding: 15,
+        borderRadius: 18,
+        marginBottom: 12,
+        borderWidth: 1,
+        borderColor: '#1E293B',
+    },
+    heroBox: {
+        width: '100%',
+        backgroundColor: '#1E293B', // Slightly lighter to make it pop
+        borderColor: '#334155',
         marginBottom: 15,
     },
-    statLabel: {
-        fontSize: 9,
-        fontWeight: '800',
+    iconRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginBottom: 10,
+    },
+    label: {
         color: '#94A3B8',
-        letterSpacing: 1,
-        marginTop: 4,
-        marginBottom: 2,
-    },
-    statValue: {
-        fontSize: 18,
-        fontWeight: '900',
-        color: '#0F172A',
-    },
-    statUnit: {
         fontSize: 10,
+        fontWeight: '800',
+        marginLeft: 6,
+        letterSpacing: 0.5,
+    },
+    value: {
+        color: '#F8FAFC',
+        fontSize: 22,
+        fontWeight: '900',
+    },
+    heroValue: {
+        fontSize: 28,
+        color: '#0EA5E9', // Orange color for the calories text
+    },
+    unit: {
         color: '#64748B',
-        fontWeight: '600',
+        fontSize: 11,
+        fontWeight: '700',
     }
 });
-
-export default WalkStats;

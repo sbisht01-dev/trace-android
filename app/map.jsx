@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, memo } from 'react';
 import { StyleSheet, View, Text, TouchableOpacity, Modal, FlatList } from 'react-native';
-import MapView, { Polyline, Heatmap, UrlTile } from 'react-native-maps';
+import MapView, { Polyline, Heatmap, UrlTile, PROVIDER_GOOGLE } from 'react-native-maps';
 import * as Location from 'expo-location';
 import * as SQLite from 'expo-sqlite';
 import * as TaskManager from 'expo-task-manager';
@@ -33,6 +33,13 @@ TaskManager.defineTask(LOCATION_TASK_NAME, async ({ data, error }) => {
     }
 });
 
+// --- HEATMAP UI/UX CONFIG ---
+const HEATMAP_GRADIENT = {
+    colors: ["#FDE047", "#F97316", "#EA580C"], // Yellow to Deep Orange
+    startPoints: [0.1, 0.5, 0.9],
+    colorMapSize: 256
+};
+
 // --- 2. DARK THUMBNAIL COMPONENT ---
 const ThumbnailMap = memo(({ walkId }) => {
     const [previewPath, setPreviewPath] = useState([]);
@@ -47,13 +54,16 @@ const ThumbnailMap = memo(({ walkId }) => {
     return (
         <MapView
             style={styles.thumbnailMap}
-            liteMode={true}
+            provider={PROVIDER_GOOGLE}
             initialRegion={{
                 latitude: previewPath[0].latitude,
                 longitude: previewPath[0].longitude,
                 latitudeDelta: 0.005, longitudeDelta: 0.005,
             }}
             scrollEnabled={false}
+            zoomEnabled={false}
+            pitchEnabled={false}
+            rotateEnabled={false}
         >
             <UrlTile urlTemplate="https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png" maximumZ={19} flipY={false} />
             <Polyline coordinates={previewPath} strokeWidth={3} strokeColor="#0EA5E9" />
@@ -65,6 +75,7 @@ export default function MapScreen() {
     const insets = useSafeAreaInsets();
     const mapRef = useRef(null);
     const lastSpeedUpdateTime = useRef(0);
+    const trackingStartTime = useRef(null); // Fix for screen-off timer bug
 
     // --- STATES ---
     const [location, setLocation] = useState(null);
@@ -89,11 +100,12 @@ export default function MapScreen() {
     // --- SETUP ---
     useEffect(() => {
         const setupDB = async () => {
-            try { db.execSync("ALTER TABLE coordinates ADD COLUMN elevation REAL;"); } catch(e){}
+            try { db.execSync("ALTER TABLE coordinates ADD COLUMN elevation REAL;"); } catch (e) { }
             db.execSync(`
-                CREATE TABLE IF NOT EXISTS walks (id TEXT PRIMARY KEY, date TEXT, time TEXT, distance REAL, duration INTEGER);
-                CREATE TABLE IF NOT EXISTS coordinates (id INTEGER PRIMARY KEY AUTOINCREMENT, walk_id TEXT, latitude REAL, longitude REAL, elevation REAL, timestamp INTEGER);
-            `);
+    CREATE TABLE IF NOT EXISTS user_profile (id INTEGER PRIMARY KEY, weight_kg REAL, height_cm REAL);
+    -- Insert a default user if none exists (e.g., 70kg)
+    INSERT OR IGNORE INTO user_profile (id, weight_kg, height_cm) VALUES (1, 70.0, 170.0);
+`);
             loadAllWalks();
         };
         setupDB();
@@ -105,7 +117,6 @@ export default function MapScreen() {
         setSavedWalks(walks);
     };
 
-    // --- BUG-FIXED APPLY FILTERS ---
     const applyFilters = (start, end, walkId) => {
         try {
             let query = 'SELECT latitude, longitude, elevation, timestamp FROM coordinates';
@@ -135,7 +146,6 @@ export default function MapScreen() {
         }
     };
 
-    // --- TRACKING HELPERS ---
     const startBackgroundTracking = async () => {
         await Location.startLocationUpdatesAsync(LOCATION_TASK_NAME, {
             accuracy: Location.Accuracy.BestForNavigation, timeInterval: 5000, distanceInterval: 3,
@@ -146,7 +156,7 @@ export default function MapScreen() {
     const handleToggleTracking = async () => {
         const { status: fgStatus } = await Location.requestForegroundPermissionsAsync();
         const { status: bgStatus } = await Location.requestBackgroundPermissionsAsync();
-        
+
         if (fgStatus !== 'granted' || bgStatus !== 'granted') {
             alert("Background and Foreground location permissions are required.");
             return;
@@ -155,8 +165,12 @@ export default function MapScreen() {
         if (!isTracking) {
             const newID = `WALK_${Date.now()}`;
             const now = new Date();
-            db.runSync('INSERT INTO walks (id, date, time, distance, duration) VALUES (?, ?, ?, ?, ?)', [newID, now.toISOString().split('T')[0], now.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}), 0, 0]);
-            
+
+            // Set true start time for accurate background tracking
+            trackingStartTime.current = Date.now();
+
+            db.runSync('INSERT INTO walks (id, date, time, distance, duration) VALUES (?, ?, ?, ?, ?)', [newID, now.toISOString().split('T')[0], now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), 0, 0]);
+
             setIsTracking(true); setIsFollowingUser(true); setPath([]); setDistance(0); setElapsedTime(0); setCurrentSpeed(0); setSelectedWalkID(null);
             await startBackgroundTracking();
         } else {
@@ -164,15 +178,26 @@ export default function MapScreen() {
             const hasStarted = await Location.hasStartedLocationUpdatesAsync(LOCATION_TASK_NAME);
             if (hasStarted) await Location.stopLocationUpdatesAsync(LOCATION_TASK_NAME);
 
-            db.runSync('UPDATE walks SET distance = ?, duration = ? WHERE id = (SELECT id FROM walks ORDER BY id DESC LIMIT 1)', [distance || 0, elapsedTime || 0]);
+            // Calculate final accurate duration even if screen was off
+            const finalDuration = trackingStartTime.current ? Math.floor((Date.now() - trackingStartTime.current) / 1000) : elapsedTime;
+
+            db.runSync('UPDATE walks SET distance = ?, duration = ? WHERE id = (SELECT id FROM walks ORDER BY id DESC LIMIT 1)', [distance || 0, finalDuration || 0]);
             loadAllWalks();
+            trackingStartTime.current = null;
         }
     };
 
-    // --- TIMER & UI SYNC ---
+    // --- ACCURATE BACKGROUND TIMER SYNC ---
     useEffect(() => {
         let interval = null;
-        if (isTracking) interval = setInterval(() => setElapsedTime(p => p + 1), 1000);
+        if (isTracking) {
+            interval = setInterval(() => {
+                if (trackingStartTime.current) {
+                    // Calculate time based on system clock, not ticks
+                    setElapsedTime(Math.floor((Date.now() - trackingStartTime.current) / 1000));
+                }
+            }, 1000);
+        }
         return () => clearInterval(interval);
     }, [isTracking]);
 
@@ -206,7 +231,6 @@ export default function MapScreen() {
         return () => sub?.then(s => s.remove());
     }, [isTracking, isFollowingUser]);
 
-    // --- ROBUST CENTER ON USER ---
     const centerOnUser = async () => {
         try {
             const { status } = await Location.requestForegroundPermissionsAsync();
@@ -238,7 +262,7 @@ export default function MapScreen() {
                             <Text style={styles.filterLabel}>TO</Text>
                             <Text style={styles.filterValue}>{toDate || 'Pick Date'}</Text>
                         </TouchableOpacity>
-                        <TouchableOpacity style={styles.resetCircle} onPress={() => { setFromDate(null); setToDate(null); setSelectedWalkID(null); applyFilters(null,null,null); }}>
+                        <TouchableOpacity style={styles.resetCircle} onPress={() => { setFromDate(null); setToDate(null); setSelectedWalkID(null); applyFilters(null, null, null); }}>
                             <Feather name="refresh-ccw" size={16} color="#94A3B8" />
                         </TouchableOpacity>
                     </View>
@@ -253,21 +277,37 @@ export default function MapScreen() {
                 </View>
             )}
 
-            {showPicker && <DateTimePicker value={new Date()} mode="date" onChange={(e, d) => { setShowPicker(false); if(d) { const s = d.toISOString().split('T')[0]; pickerMode === 'from' ? setFromDate(s) : setToDate(s); applyFilters(pickerMode === 'from' ? s : fromDate, pickerMode === 'to' ? s : toDate, null); }}} maximumDate={new Date()} />}
+            {showPicker && <DateTimePicker value={new Date()} mode="date" onChange={(e, d) => { setShowPicker(false); if (d) { const s = d.toISOString().split('T')[0]; pickerMode === 'from' ? setFromDate(s) : setToDate(s); applyFilters(pickerMode === 'from' ? s : fromDate, pickerMode === 'to' ? s : toDate, null); } }} maximumDate={new Date()} />}
 
             {/* --- OPEN STREET MAP (DARK MINIMAL) --- */}
-            <MapView ref={mapRef} style={styles.map} onPanDrag={() => setIsFollowingUser(false)} showsUserLocation={true} showsMyLocationButton={false}>
+            <MapView
+                ref={mapRef}
+                style={styles.map}
+                provider={PROVIDER_GOOGLE}
+                onPanDrag={() => setIsFollowingUser(false)}
+                showsUserLocation={true}
+                showsMyLocationButton={false}
+            >
                 <UrlTile urlTemplate="https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png" maximumZ={19} flipY={false} />
-                
-                {!isTracking && !selectedWalkID && displayCoords.length > 0 && (
-                    <Heatmap points={displayCoords} radius={40} opacity={0.6} gradient={{ colors: ["transparent", "#0284C7", "#0EA5E9", "#38BDF8"], startPoints: [0.1, 0.4, 0.7, 0.9], colorMapSize: 256 }} />
+
+                {!isTracking && !selectedWalkID && displayCoords && displayCoords.length > 0 && (
+                    <Heatmap
+                        points={displayCoords.map(p => ({
+                            latitude: p.latitude,
+                            longitude: p.longitude,
+                            weight: 1
+                        }))}
+                        radius={20} // Reduced for better zoom-out UX
+                        opacity={0.7}
+                        gradient={HEATMAP_GRADIENT}
+                    />
                 )}
-                
+
                 {(isTracking || selectedWalkID) && (
                     <Polyline coordinates={isTracking ? path : displayCoords} strokeWidth={5} strokeColor="#0EA5E9" lineCap="round" />
                 )}
             </MapView>
-            
+
             <Text style={styles.attribution}>© OpenStreetMap contributors</Text>
 
             <Modal visible={showWalkPicker} transparent animationType="slide">
@@ -300,7 +340,7 @@ export default function MapScreen() {
                                 <View style={{ flex: 1 }}><Text style={styles.l}>SPEED</Text><Text style={styles.v}>{currentSpeed.toFixed(1)} <Text style={styles.u}>KM/H</Text></Text></View>
                             </View>
                         ) : <View style={{ flex: 1 }}><Text style={styles.readyText}>READY TO TRACE</Text></View>}
-                        
+
                         <TouchableOpacity style={[styles.mainBtn, isTracking ? styles.stop : styles.start]} onPress={handleToggleTracking}>
                             <Feather name={isTracking ? "square" : "play"} size={24} color="#FFF" />
                         </TouchableOpacity>
@@ -316,7 +356,7 @@ const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: '#020617' },
     map: { width: '100%', height: '100%' },
     attribution: { position: 'absolute', bottom: 180, right: 10, fontSize: 10, color: 'rgba(255,255,255,0.4)', zIndex: 1 },
-    
+
     filterHeader: { position: 'absolute', width: '90%', alignSelf: 'center', zIndex: 10 },
     rangeBar: { flexDirection: 'row', backgroundColor: '#0F172A', borderRadius: 25, padding: 12, alignItems: 'center', borderWidth: 1, borderColor: '#1E293B', shadowColor: '#000', shadowOpacity: 0.5, shadowRadius: 10 },
     dateSelector: { flex: 1, alignItems: 'center' },
@@ -324,15 +364,15 @@ const styles = StyleSheet.create({
     filterLabel: { fontSize: 8, fontWeight: '800', color: '#64748B', letterSpacing: 1 },
     filterValue: { fontSize: 13, fontWeight: '700', color: '#F8FAFC' },
     resetCircle: { padding: 8 },
-    
+
     sessionSelect: { marginTop: 10, backgroundColor: '#0F172A', padding: 16, borderRadius: 25, flexDirection: 'row', justifyContent: 'space-between', borderWidth: 1, borderColor: '#1E293B' },
     sessionText: { fontWeight: '700', fontSize: 13, color: '#F8FAFC' },
-    
+
     modalBg: { flex: 1, backgroundColor: 'rgba(2, 6, 23, 0.8)', justifyContent: 'center', alignItems: 'center' },
     modalBody: { backgroundColor: '#0F172A', borderRadius: 35, padding: 25, borderWidth: 1, borderColor: '#1E293B' },
     modalTitle: { fontWeight: '900', fontSize: 22, marginBottom: 20, color: '#F8FAFC' },
     sessionItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#1E293B' },
-    
+
     thumbnailContainer: { width: 65, height: 65, borderRadius: 18, overflow: 'hidden', backgroundColor: '#020617', borderWidth: 1, borderColor: '#1E293B' },
     thumbnailMap: { width: '100%', height: '100%' },
     thumbnailPlaceholder: { width: 65, height: 65, borderRadius: 18, backgroundColor: '#1E293B' },
@@ -341,20 +381,20 @@ const styles = StyleSheet.create({
     subText: { fontSize: 12, color: '#64748B', marginTop: 2 },
     cancel: { marginTop: 20, alignSelf: 'center', padding: 10 },
     cancelBtnText: { fontWeight: '800', color: '#0EA5E9' },
-    
+
     overlay: { position: 'absolute', bottom: 40, width: '100%', alignItems: 'center', zIndex: 2 },
     contentWrapper: { width: '92%' },
-    
+
     locBtn: { width: 54, height: 54, borderRadius: 27, backgroundColor: '#0F172A', alignSelf: 'flex-end', justifyContent: 'center', alignItems: 'center', marginBottom: 15, borderWidth: 1, borderColor: '#1E293B', shadowColor: '#000', shadowOpacity: 0.3 },
     locBtnActive: { borderColor: '#0EA5E9', backgroundColor: '#0F172A' },
-    
+
     card: { backgroundColor: '#0F172A', padding: 20, borderRadius: 35, flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: '#1E293B', shadowColor: '#000', shadowOpacity: 0.4 },
     row: { flex: 1, flexDirection: 'row', alignItems: 'center' },
     readyText: { fontWeight: '900', fontSize: 18, color: '#F8FAFC', letterSpacing: -0.5 },
     l: { fontWeight: '800', fontSize: 9, color: '#64748B', letterSpacing: 1, marginBottom: 2 },
     v: { fontWeight: '900', fontSize: 20, color: '#F8FAFC' },
     u: { fontSize: 10, color: '#64748B', fontWeight: '700' },
-    
+
     mainBtn: { width: 60, height: 60, borderRadius: 30, justifyContent: 'center', alignItems: 'center' },
     start: { backgroundColor: '#0EA5E9' },
     stop: { backgroundColor: '#EF4444' }

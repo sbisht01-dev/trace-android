@@ -2,7 +2,7 @@
   "expo": {
     "name": "trace-android",
     "slug": "trace-android",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "android": {
       "package": "com.watcher_01.traceandroid",
       "permissions": [
@@ -12,7 +12,12 @@
         "FOREGROUND_SERVICE",
         "FOREGROUND_SERVICE_LOCATION",
         "WAKE_LOCK"
-      ]
+      ],
+      "config": {
+        "googleMaps": {
+          "apiKey": "AIzaSyDQGs2yQ86yi3abXdWO_38i3lDQbkztoVI"
+        }
+      },
     },
     "plugins": [
       "expo-router",
