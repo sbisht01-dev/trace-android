@@ -3,9 +3,9 @@ import { StyleSheet, View, Text, TextInput, TouchableOpacity, Alert, ScrollView 
 import * as SQLite from 'expo-sqlite';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
-import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import * as DocumentPicker from 'expo-document-picker';
+import * as FileSystem from 'expo-file-system/legacy';
 
 const db = SQLite.openDatabaseSync('trace_db');
 
@@ -31,7 +31,7 @@ export default function ProfileScreen() {
         if (profile) {
             setWeight(profile.weight_kg ? profile.weight_kg.toString() : '');
             setHeight(profile.height_cm ? profile.height_cm.toString() : '');
-            
+
             if (profile.username) {
                 setUsername(profile.username);
             } else {
@@ -55,6 +55,7 @@ export default function ProfileScreen() {
         }
     };
 
+    // --- LEGACY COMPATIBLE PRODUCTION-SAFE EXPORT ---
     const handleExportData = async () => {
         try {
             const profile = db.getFirstSync('SELECT * FROM user_profile WHERE id = 1');
@@ -62,22 +63,34 @@ export default function ProfileScreen() {
             const coordinates = db.getAllSync('SELECT * FROM coordinates');
 
             const exportData = {
-                version: "1.0", exportDate: new Date().toISOString(), profile, walks, coordinates
+                version: "1.0",
+                exportDate: new Date().toISOString(),
+                profile,
+                walks,
+                coordinates
             };
 
             const jsonString = JSON.stringify(exportData);
+
+            // Generate a clean local system disk destination URI
             const fileUri = `${FileSystem.cacheDirectory}trace_backup_${Date.now()}.json`;
-            
+
+            // Execute the write command using the isolated legacy bundle path
             await FileSystem.writeAsStringAsync(fileUri, jsonString);
-            
+
             const isAvailable = await Sharing.isAvailableAsync();
             if (isAvailable) {
-                await Sharing.shareAsync(fileUri, { mimeType: 'application/json', dialogTitle: 'Export Trace Telemetry' });
+                // Passes a pristine file:// URL straight to the mobile OS engine
+                await Sharing.shareAsync(fileUri, {
+                    mimeType: 'application/json',
+                    dialogTitle: 'Export Trace Telemetry'
+                });
             } else {
                 Alert.alert("Sharing Unavailable", "Your device does not support file sharing.");
             }
         } catch (error) {
-            Alert.alert("Export Failed", "Could not generate backup file.");
+            console.error("Export Trace Failure:", error);
+            Alert.alert("Export Failed", "Could not generate backup file on local storage.");
         }
     };
 
@@ -92,7 +105,7 @@ export default function ProfileScreen() {
             const pickedUri = result.assets[0].uri;
             const response = await fetch(pickedUri);
             const fileContents = await response.text();
-            
+
             const importData = JSON.parse(fileContents);
 
             if (!importData.walks || !importData.coordinates) {
@@ -113,7 +126,7 @@ export default function ProfileScreen() {
     const processImport = (data) => {
         try {
             if (data.profile) {
-                db.runSync('UPDATE user_profile SET weight_kg = ?, height_cm = ?, username = ? WHERE id = 1', 
+                db.runSync('UPDATE user_profile SET weight_kg = ?, height_cm = ?, username = ? WHERE id = 1',
                     [data.profile.weight_kg || 70, data.profile.height_cm || 170, data.profile.username || username]);
             }
             data.walks.forEach(walk => {
@@ -122,10 +135,10 @@ export default function ProfileScreen() {
             data.coordinates.forEach(coord => {
                 db.runSync('INSERT OR IGNORE INTO coordinates (id, walk_id, latitude, longitude, elevation, timestamp) VALUES (?, ?, ?, ?, ?, ?)', [coord.id, coord.walk_id, coord.latitude, coord.longitude, coord.elevation, coord.timestamp]);
             });
-            
+
             // CRITICAL FIX: Reload the profile state immediately after import
             loadProfileData();
-            
+
             Alert.alert("Sync Complete", "Telemetry data successfully restored.");
         } catch (error) {
             Alert.alert("Database Error", "Failed to merge imported data.");
@@ -144,7 +157,7 @@ export default function ProfileScreen() {
         try {
             db.runSync('DELETE FROM coordinates;');
             db.runSync('DELETE FROM walks;');
-            
+
             // CRITICAL FIX: Clear the UI states instantly (Username is kept, but history is gone)
             Alert.alert("System Restored", "All spatial and temporal sessions have been entirely cleared.");
         } catch (error) {
