@@ -1,11 +1,14 @@
-{
-  "expo": {
-    "name": "trace-android",
-    "slug": "trace-android",
-    "version": "1.1.0",
-    "android": {
-      "package": "com.watcher_01.traceandroid",
-      "permissions": [
+module.exports = {
+  expo: {
+    name: "trace-android",
+    slug: "trace-android",
+    version: "1.1.0",
+    orientation: "portrait",
+    userInterfaceStyle: "dark",
+    
+    android: {
+      package: "com.watcher_01.traceandroid",
+      permissions: [
         "ACCESS_FINE_LOCATION",
         "ACCESS_COARSE_LOCATION",
         "ACCESS_BACKGROUND_LOCATION",
@@ -13,13 +16,17 @@
         "FOREGROUND_SERVICE_LOCATION",
         "WAKE_LOCK"
       ],
-      "config": {
-        "googleMaps": {
-          "apiKey": "AIzaSyDQGs2yQ86yi3abXdWO_38i3lDQbkztoVI"
+      config: {
+        googleMaps: {
+          // --- SECURITY HOOK ---
+          // Pulls dynamically from your local .env file during development/local builds
+          // and from EAS Secrets during automated production cloud builds.
+          apiKey: process.env.GOOGLE_MAPS_API_KEY
         }
       }
     },
-    "plugins": [
+    
+    plugins: [
       "expo-router",
       "expo-sqlite",
       "expo-font",
@@ -39,10 +46,11 @@
         }
       ]
     ],
-    "extra": {
-      "eas": {
-        "projectId": "83b38256-4700-4ea4-8fd9-5ce308606737"
+    
+    extra: {
+      eas: {
+        projectId: "83b38256-4700-4ea4-8fd9-5ce308606737"
       }
     }
   }
-}
+};
