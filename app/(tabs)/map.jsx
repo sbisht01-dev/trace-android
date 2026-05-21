@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { StyleSheet, View, Text, TouchableOpacity, Platform } from 'react-native';
-import MapView, { Polyline, Heatmap, UrlTile, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapView, { Polyline, UrlTile, PROVIDER_GOOGLE } from 'react-native-maps';
 import * as Location from 'expo-location';
 import * as SQLite from 'expo-sqlite';
 import * as TaskManager from 'expo-task-manager';
@@ -31,12 +31,6 @@ TaskManager.defineTask(LOCATION_TASK_NAME, async ({ data, error }) => {
     }
 });
 
-const HEATMAP_GRADIENT = {
-    colors: ["#FDE047", "#F97316", "#EA580C"],
-    startPoints: [0.1, 0.5, 0.9],
-    colorMapSize: 256
-};
-
 export default function MapScreen() {
     const insets = useSafeAreaInsets();
     const mapRef = useRef(null);
@@ -51,7 +45,9 @@ export default function MapScreen() {
     const [currentElevation, setCurrentElevation] = useState(0);
     const [currentSpeed, setCurrentSpeed] = useState(0);
     const [isFollowingUser, setIsFollowingUser] = useState(true);
-    const [globalCoords, setGlobalCoords] = useState([]);
+    
+    // --- NEW: HISTORICAL PATHS STATE (Replaces globalCoords) ---
+    const [historicalPaths, setHistoricalPaths] = useState([]);
 
     useEffect(() => {
         const setupDB = () => {
@@ -95,7 +91,7 @@ export default function MapScreen() {
                     );
                 `);
 
-                // 5. FIXED: Isolate the row insertion query into its own single operational string execution
+                // 5. Isolate the row insertion query into its own single operational string execution
                 db.runSync(`
                     INSERT OR IGNORE INTO user_profile (id, weight_kg, height_cm) 
                     VALUES (1, 70.0, 170.0);
@@ -112,9 +108,22 @@ export default function MapScreen() {
         centerOnUser();
     }, []);
 
+    // --- NEW: MULTI-POLYLINE DATA LOADER ---
     const loadGlobalHeatmap = () => {
-        const result = db.getAllSync('SELECT latitude, longitude FROM coordinates') || [];
-        setGlobalCoords(result);
+        // Fetch all coordinates, ordered by time so paths draw correctly
+        const result = db.getAllSync('SELECT walk_id, latitude, longitude FROM coordinates ORDER BY timestamp ASC') || [];
+        
+        // Group them cleanly by walk_id so lines don't connect across different days
+        const groupedPaths = {};
+        result.forEach(point => {
+            if (!groupedPaths[point.walk_id]) {
+                groupedPaths[point.walk_id] = [];
+            }
+            groupedPaths[point.walk_id].push({ latitude: point.latitude, longitude: point.longitude });
+        });
+
+        // Save as an array of path arrays
+        setHistoricalPaths(Object.values(groupedPaths));
     };
 
     const startBackgroundTracking = async () => {
@@ -213,7 +222,6 @@ export default function MapScreen() {
     };
 
     // --- PIXEL-PERFECT CALIBRATION ---
-    // Matches your Tab Bar height exactly: (Platform Base [64/68] + System Inset) + 16px dynamic margin gap.
     const tabLayoutHeight = (Platform.OS === 'ios' ? 64 : 0) + insets.bottom;
     const elementBottomOffset = tabLayoutHeight;
 
@@ -229,21 +237,21 @@ export default function MapScreen() {
             >
                 <UrlTile urlTemplate="https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png" maximumZ={19} flipY={false} />
 
-                {!isTracking && globalCoords && globalCoords.length > 0 && (
-                    <Heatmap
-                        points={globalCoords.map(p => ({
-                            latitude: p.latitude,
-                            longitude: p.longitude,
-                            weight: 1
-                        }))}
-                        radius={20}
-                        opacity={0.7}
-                        gradient={HEATMAP_GRADIENT}
+                {/* --- STRAVA STYLE PERSONAL HEATMAP --- */}
+                {!isTracking && historicalPaths.map((historicalPath, index) => (
+                    <Polyline 
+                        key={`history-${index}`}
+                        coordinates={historicalPath} 
+                        strokeWidth={16} 
+                        strokeColor="rgba(0, 119, 255, 0.3)" // 20% Opacity Deep Orange
+                        lineCap="round" 
+                        lineJoin="round"
                     />
-                )}
+                ))}
 
+                {/* ACTIVE TRACING LINE */}
                 {isTracking && (
-                    <Polyline coordinates={path} strokeWidth={5} strokeColor="#0EA5E9" lineCap="round" />
+                    <Polyline coordinates={path} strokeWidth={5} strokeColor="#0EA5E9" lineCap="round" lineJoin="round" />
                 )}
             </MapView>
 
@@ -341,7 +349,7 @@ const styles = StyleSheet.create({
     metricsColumn: {
         flex: 1,
         flexDirection: 'column',
-        gap: 16, // Creates clean breathing room between Time and the sub-row
+        gap: 16, 
     },
     primaryMetricRow: {
         flexDirection: 'column',
@@ -358,8 +366,6 @@ const styles = StyleSheet.create({
         flexDirection: 'column',
     },
 
-    // --- MACRO NUMERICAL TYPOGRAPHY ---
-    // Massive, tight tracking configuration for the main clock string
     vLarge: {
         color: '#FFFFFF',
         fontSize: 38,
