@@ -21,7 +21,7 @@ module.exports = {
           // --- SECURITY HOOK ---
           // Pulls dynamically from your local .env file during development/local builds
           // and from EAS Secrets during automated production cloud builds.
-          apiKey: process.env.GOOGLE_MAPS_API_KEY
+          apiKey: process.env.GOOGLE_MAP_PROD_KEY
         }
       }
     },
